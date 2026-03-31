@@ -1,5 +1,6 @@
 # Mackup Ignore List
-# Apps to exclude from mackup backup to prevent syncing sensitive data
+# These are backed up via secrets-sync.sh to 1Password instead
+# DO NOT back up with mackup (use scripts/secrets-sync.sh instead)
 
 1Password
 aws
@@ -13,3 +14,7 @@ slack
 telegram
 whatsapp
 signal
+
+# Apps that are safe to sync via mackup
+# zsh, git, iterm2, vscode, oh-my-zsh
+# See ~/.mackup.cfg for what gets synced

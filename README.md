@@ -107,17 +107,17 @@ brew bundle dump --file ./Brewfile --force
 dotfiles/
 ├── Brewfile                    # Homebrew packages & casks
 ├── setup/
-│   ├── install.sh            # Main installation script
-│   ├── macos-defaults.sh      # macOS system preferences
-│   └── post-install.md        # Manual setup steps
-├── configs/                    # Sanitized config templates (examples)
-│   ├── zsh/
-│   │   └── .zshrc.template
-│   └── git/
-│       └── .gitconfig.template
+│   ├── install.sh              # Main installation script
+│   ├── macos-defaults.sh       # macOS system preferences
+│   └── post-install.md         # Manual setup steps
+├── scripts/
+│   ├── secrets-sync.sh         # Unified secrets backup/restore
+│   ├── secrets.sh              # 1Password secret storage helpers
+│   ├── git-setup.sh            # SSH key setup
+│   └── load-secrets.sh         # Auto-load credentials into shell
+├── mackup-backup/              # Mackup-managed app configs
 ├── .gitignore                  # Prevents committing secrets
-├── README.md
-└── LICENSE
+└── README.md
 ```
 
 ## 🛠️ Manual Setup Steps
@@ -153,7 +153,141 @@ After running scripts, you may need to:
 - ❌ **Credentials** — never commit (use 1Password or similar)
 - ❌ **SSH keys** — keep in ~/.ssh (or sync to Google Drive via Mackup only)
 - ❌ **API tokens** — use environment variables or secure storage
+## 🐙 Git & GitHub Setup
 
-## 📝 License
+### Your Current Git Config
 
-MIT
+```
+✅ User: Pietro Rampazzo
+✅ Email: pietro@rampazzo.eu
+✅ Credential Helper: osxkeychain (macOS default)
+```
+
+### GitHub Authentication (via `gh` CLI)
+
+Use GitHub CLI for seamless GitHub authentication (better than personal access tokens).
+
+**Setup:**
+```bash
+# Install GitHub CLI
+brew install gh
+
+# Authenticate
+gh auth login
+# Follow prompts to authenticate with GitHub
+
+# Verify
+gh auth status
+```
+
+**Why GitHub CLI?**
+- ✅ Secure OAuth-based authentication
+- ✅ Credentials automatically synced via 1Password
+- ✅ Works with git commands automatically
+- ✅ No token management needed
+- ✅ Credentials backed up and restored via scripts
+
+**Backup & restore GitHub credentials:**
+```bash
+# Backup to 1Password
+./scripts/secrets-sync.sh backup github
+
+# Restore on new machine
+./scripts/secrets-sync.sh restore github
+```
+
+### Git SSH Setup (Additional Security)
+
+For enhanced security, add SSH key authentication:
+
+```bash
+./scripts/git-setup.sh ssh
+```
+
+This:
+1. Generates Ed25519 SSH key
+2. Shows public key to add to GitHub
+3. Sets up ~/.ssh/config
+## � Managing Credentials with 1Password
+
+This repo includes scripts to securely manage credentials using 1Password CLI.
+
+### Setup
+
+1. **Install 1Password CLI**:
+   ```bash
+   brew install 1password-cli
+   op account add  # Sign in
+   ```
+
+2. **Create a vault for secrets**:
+   ```bash
+   ./scripts/secrets.sh create-vault dev
+   ```
+
+### Usage
+
+**Save a credential:**
+```bash
+./scripts/secrets.sh save dev slack_token "xoxb-xxxxx"
+./scripts/secrets.sh save dev github_token "ghp_xxxxx"
+```
+
+**Retrieve a credential:**
+```bash
+./scripts/secrets.sh get dev slack_token
+```
+
+**List all secrets in a vault:**
+```bash
+./scripts/secrets.sh list dev
+```
+
+**Load credentials in your shell** (add to `~/.zshrc`):
+```bash
+# Manual load:
+export GITHUB_TOKEN="$(./scripts/secrets.sh get dev github_token)"
+
+# Or edit scripts/load-secrets.sh and source it:
+eval "$(~/GitHub/dotfiles/scripts/load-secrets.sh)"
+```
+
+**Export for use in scripts:**
+```bash
+eval "$(./scripts/secrets.sh export dev DATABASE_URL db_password)"
+echo $DATABASE_URL
+```
+
+### What Goes Where
+
+| Config | Storage | Mackup? | secrets-sync? | Git tracked? |
+|--------|---------|---------|---------------|--------------|
+| .zshrc | Local | ✅ Google Drive | ❌ | ❌ |
+| .gitconfig | Local | ❌ | ✅ 1Password | ❌ |
+| iTerm2 prefs | Local | ✅ Google Drive | ❌ | ❌ |
+| AWS creds | ~/.aws | ❌ | ✅ 1Password | ❌ |
+| Docker creds | ~/.docker | ❌ | ✅ 1Password | ❌ |
+| Kube config | ~/.kube | ❌ | ✅ 1Password | ❌ |
+| GitHub token | ~/.config/gh | ❌ | ✅ 1Password | ❌ |
+| SSH keys | ~/.ssh | ❌ | ⚠️ Ref only | ❌ |
+
+**Never commit:** API keys, database credentials, SSH keys, tokens, registry passwords, or cloud credentials.
+
+### Useful Commands
+
+```bash
+# Help
+./scripts/secrets.sh help
+
+# Create production vault (caution!)
+./scripts/secrets.sh create-vault prod
+
+# List all vaults and secrets
+op vault list
+op item list --vault dev
+
+# Securely delete a secret
+op item delete secret_name --vault dev
+```
+
+For more info: https://1password.com/devs/
