@@ -1,0 +1,21 @@
+[storage]
+engine = google_drive
+
+[apps_to_sync]
+zsh
+git
+iterm2
+
+[apps_to_ignore]
+1Password
+aws
+azure-cli
+docker
+gcloud
+gnupg
+kube
+ssh
+slack
+telegram
+whatsapp
+signal

@@ -1,0 +1,15 @@
+# Mackup Ignore List
+# Apps to exclude from mackup backup to prevent syncing sensitive data
+
+1Password
+aws
+azure-cli
+docker
+gcloud
+gnupg
+kube
+ssh
+slack
+telegram
+whatsapp
+signal

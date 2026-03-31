@@ -1,0 +1,35 @@
+# Environment & Secrets
+.env
+.env.local
+.env.*.local
+*.key
+*.pem
+secrets/
+**/secrets/*
+**/*credentials*
+**/*token*
+**/*password*
+**/keys/*
+
+# Mackup (config storage - not git tracked)
+.mackup/
+.mackup.cfg
+mackup-backup/
+
+# macOS
+.DS_Store
+*.swp
+*.swo
+*~
+
+# IDE
+.vscode/settings.json
+.idea/
+
+# Sensitive app configs (if accidentally copied)
+.aws/credentials
+.aws/config
+.ssh/
+.gnupg/
+.kube/config
+.docker/config.json
