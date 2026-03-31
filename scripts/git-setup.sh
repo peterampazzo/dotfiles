@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Git Credentials Setup with 1Password
-# This script helps configure Git to use 1Password for credentials
+# Git Setup: gh CLI auth + SSH key + signed commits + 1Password backup
+# Usage: ./scripts/git-setup.sh [setup|status|test]
 
 set -e
 
@@ -12,227 +12,288 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SECRETS_SCRIPT="$SCRIPT_DIR/secrets.sh"
+VAULT="Private"
+SSH_KEY="$HOME/.ssh/id_ed25519"
+
 show_usage() {
     cat << EOF
-${BLUE}Git Credentials Setup${NC}
+${BLUE}Git Setup${NC}
+Authenticate with GitHub, generate SSH key, enable signed commits, and backup to 1Password.
 
 Usage: ./scripts/git-setup.sh [command]
 
 Commands:
-  ssh             Setup SSH authentication with GitHub
-  token           Setup personal access token authentication
-  status          Check current Git configuration
-  test            Test Git authentication
+  setup     Full setup: gh auth → SSH key → commit signing → 1Password backup
+  status    Show current Git/SSH/signing configuration
+  test      Test SSH auth and commit signing
 
-Authentication Methods:
-  SSH (Recommended):
-    - Secure SSH key-based authentication
-    - Key stored in ~/.ssh, passphrase in 1Password
-    - Works across CLI, IDE, and git tools
-
-  Token (Simple):
-    - GitHub personal access token
-    - Token stored in 1Password
-    - Useful for CI/CD or scripts
-
-Examples:
-  ./scripts/git-setup.sh ssh      # Setup SSH keys
-  ./scripts/git-setup.sh token    # Setup GitHub token
-  ./scripts/git-setup.sh status   # Check current setup
-  ./scripts/git-setup.sh test     # Test authentication
+Steps performed by 'setup':
+  1. Authenticate with GitHub via gh CLI (SSH protocol)
+  2. Generate Ed25519 SSH key (if missing)
+  3. Upload SSH key to GitHub (auth + signing)
+  4. Configure git to sign commits with SSH key
+  5. Backup SSH public key to 1Password
 EOF
 }
 
-# Check prerequisites
 check_prereqs() {
-    if ! command -v git &> /dev/null; then
-        echo -e "${RED}❌ Git not installed${NC}"
-        exit 1
-    fi
-
-    if ! command -v op &> /dev/null; then
-        echo -e "${RED}❌ 1Password CLI not installed${NC}"
-        echo "Install with: brew install 1password-cli"
+    local missing=0
+    for cmd in git gh op; do
+        if ! command -v "$cmd" &>/dev/null; then
+            echo -e "${RED}❌ $cmd not installed${NC}"
+            missing=1
+        fi
+    done
+    if [ $missing -eq 1 ]; then
+        echo "Install with: brew install git gh 1password-cli"
         exit 1
     fi
 }
 
-# Setup SSH authentication
-setup_ssh() {
-    echo -e "${BLUE}🔑 Setting up SSH authentication...${NC}"
-    
-    local ssh_key=~/.ssh/id_ed25519
-    
-    # Check if key exists
-    if [ -f "$ssh_key" ]; then
-        echo -e "${YELLOW}⚠️  SSH key already exists at $ssh_key${NC}"
-        read -p "Use existing key? (y/n) " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            echo "Generating new key..."
-            ssh-keygen -t ed25519 -C "$(git config user.email)" -f "$ssh_key" -N ""
+# ── Step 1: gh CLI authentication ──────────────────────────────────────────
+
+setup_gh_auth() {
+    echo -e "${BLUE}1️⃣  GitHub CLI authentication${NC}"
+
+    if gh auth status &>/dev/null; then
+        echo -e "${GREEN}✅ Already authenticated with GitHub CLI${NC}"
+        gh auth status 2>&1 | sed 's/^/   /'
+        # Ensure signing key scope is available
+        if ! gh auth token -h github.com 2>/dev/null | xargs -I{} gh api user/ssh_signing_keys --per-page 1 &>/dev/null; then
+            echo "Adding signing key scope..."
+            gh auth refresh -h github.com -s admin:ssh_signing_key
         fi
     else
-        echo "Generating SSH key..."
+        echo "Logging in via gh CLI (SSH protocol)..."
+        if [ -f "$SSH_KEY" ]; then
+            gh auth login --git-protocol ssh --web --skip-ssh-key -s admin:ssh_signing_key
+        else
+            gh auth login --git-protocol ssh --web -s admin:ssh_signing_key
+        fi
+    fi
+    echo ""
+}
+
+# ── Step 2: SSH key ────────────────────────────────────────────────────────
+
+setup_ssh_key() {
+    echo -e "${BLUE}2️⃣  SSH key${NC}"
+
+    if [ -f "$SSH_KEY" ]; then
+        echo -e "${GREEN}✅ SSH key exists: $SSH_KEY${NC}"
+    else
+        # gh auth login may have created it; if not, generate now
+        local email
+        email=$(git config --global user.email 2>/dev/null || echo "")
+        if [ -z "$email" ]; then
+            read -rp "Git email address: " email
+            git config --global user.email "$email"
+        fi
+        echo "Generating Ed25519 SSH key for $email..."
         mkdir -p ~/.ssh
-        ssh-keygen -t ed25519 -C "$(git config user.email)" -f "$ssh_key" -N ""
-        chmod 600 "$ssh_key"
-        chmod 644 "$ssh_key.pub"
+        ssh-keygen -t ed25519 -C "$email" -f "$SSH_KEY" -N ""
+        chmod 600 "$SSH_KEY"
+        chmod 644 "$SSH_KEY.pub"
+        echo -e "${GREEN}✅ SSH key generated${NC}"
+    fi
+    echo ""
+}
+
+# ── Step 3: Upload key to GitHub (auth + signing) ─────────────────────────
+
+upload_ssh_key() {
+    echo -e "${BLUE}3️⃣  Upload SSH key to GitHub${NC}"
+
+    local pub_key
+    pub_key=$(cat "$SSH_KEY.pub")
+    local key_title="dotfiles-$(hostname -s)-$(date +%Y%m%d)"
+
+    # Upload as authentication key
+    if gh ssh-key list 2>/dev/null | grep -qF "$(awk '{print $2}' "$SSH_KEY.pub")"; then
+        echo -e "${GREEN}✅ Auth key already on GitHub${NC}"
+    else
+        gh ssh-key add "$SSH_KEY.pub" --title "$key_title" --type authentication
+        echo -e "${GREEN}✅ Auth key uploaded to GitHub${NC}"
     fi
 
-    echo -e "${GREEN}✅ SSH key ready: $ssh_key${NC}"
-    echo -e "${BLUE}📋 Add this public key to GitHub:${NC}"
+    # Upload as signing key
+    if gh ssh-key list 2>/dev/null | grep -q "signing"; then
+        echo -e "${GREEN}✅ Signing key already on GitHub${NC}"
+    else
+        gh ssh-key add "$SSH_KEY.pub" --title "${key_title}-signing" --type signing
+        echo -e "${GREEN}✅ Signing key uploaded to GitHub${NC}"
+    fi
     echo ""
-    cat "$ssh_key.pub"
-    echo ""
-    echo -e "${BLUE}Visit: https://github.com/settings/keys → New SSH key${NC}"
-    echo ""
+}
 
-    # Configure SSH config file
-    if [ ! -f ~/.ssh/config ]; then
-        cat > ~/.ssh/config << 'SSHEOF'
+# ── Step 4: Configure git for SSH commit signing ──────────────────────────
+
+configure_signing() {
+    echo -e "${BLUE}4️⃣  Configure commit signing${NC}"
+
+    # Set identity if missing
+    if [ -z "$(git config --global user.name 2>/dev/null)" ]; then
+        read -rp "Git name: " name
+        git config --global user.name "$name"
+    fi
+
+    # SSH signing config
+    git config --global gpg.format ssh
+    git config --global user.signingkey "$SSH_KEY.pub"
+    git config --global commit.gpgsign true
+    git config --global tag.gpgsign true
+
+    # Allowed signers file (for local verification)
+    local allowed_signers="$HOME/.ssh/allowed_signers"
+    local email
+    email=$(git config --global user.email)
+    echo "$email $(cat "$SSH_KEY.pub")" > "$allowed_signers"
+    git config --global gpg.ssh.allowedSignersFile "$allowed_signers"
+
+    # SSH config for GitHub
+    if ! grep -q "Host github.com" ~/.ssh/config 2>/dev/null; then
+        mkdir -p ~/.ssh
+        cat >> ~/.ssh/config << 'SSHEOF'
+
 Host github.com
     User git
     IdentityFile ~/.ssh/id_ed25519
     AddKeysToAgent yes
     IdentitiesOnly yes
-
-Host gitlab.com
-    User git
-    IdentityFile ~/.ssh/id_ed25519
-    AddKeysToAgent yes
-    IdentitiesOnly yes
 SSHEOF
-        echo -e "${GREEN}✅ Created ~/.ssh/config${NC}"
-    else
-        echo -e "${YELLOW}⚠️  ~/.ssh/config already exists${NC}"
+        echo -e "${GREEN}✅ Updated ~/.ssh/config${NC}"
     fi
 
-    echo -e "${GREEN}✅ SSH setup complete!${NC}"
-    echo "Test with: ssh -T git@github.com"
+    # Use gh as credential helper for HTTPS fallback
+    gh auth setup-git 2>/dev/null || true
+
+    echo -e "${GREEN}✅ Commit signing enabled (SSH)${NC}"
+    echo ""
 }
 
-# Setup token authentication
-setup_token() {
-    echo -e "${BLUE}🔐 Setting up token authentication...${NC}"
-    
-    local vault="dev"
-    local git_service=$1
-    local token_url=""
-    local token="$2"
+# ── Step 5: Backup to 1Password ───────────────────────────────────────────
 
-    if [ -z "$git_service" ]; then
-        read -p "GitHub or GitLab? (github/gitlab) " git_service
+backup_to_1password() {
+    echo -e "${BLUE}5️⃣  Backup SSH key to 1Password${NC}"
+
+    if op whoami &>/dev/null || op vault list &>/dev/null; then
+        local item_name="GitHub SSH Signing Key"
+
+        # Check if item already exists
+        if op item get "$item_name" --vault "$VAULT" &>/dev/null; then
+            echo -e "${YELLOW}⚠️  '$item_name' already exists in 1Password — skipping${NC}"
+            echo "  To replace, delete it first: op item delete '$item_name' --vault $VAULT"
+        else
+            op item create --category "SSH Key" \
+                --title "$item_name" \
+                --vault "$VAULT" < "$SSH_KEY"
+            echo -e "${GREEN}✅ SSH key saved as native SSH Key item in 1Password vault '$VAULT'${NC}"
+        fi
+        echo -e "${YELLOW}ℹ️  Enable 1Password SSH agent (Settings → Developer) to use it for signing${NC}"
+    else
+        echo -e "${YELLOW}⚠️  Not signed into 1Password, skipping backup${NC}"
     fi
-
-    case "$git_service" in
-        github)
-            token_url="https://github.com/settings/tokens"
-            token_name="github_token"
-            ;;
-        gitlab)
-            token_url="https://gitlab.com/-/profile/personal_access_tokens"
-            token_name="gitlab_token"
-            ;;
-        *)
-            echo -e "${RED}❌ Unknown service: $git_service${NC}"
-            return 1
-            ;;
-    esac
-
-    echo -e "${BLUE}📋 Create a personal access token:${NC}"
-    echo "Visit: $token_url"
     echo ""
-    echo "For GitHub:"
-    echo "  - Select 'repo' scope for private/public repos"
-    echo "  - Select 'read:user' for user profile"
-    echo ""
-
-    if [ -z "$token" ]; then
-        read -sp "Paste your token: " token
-        echo
-    fi
-
-    # Store in 1Password
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    "$SCRIPT_DIR/secrets.sh" save "$vault" "$token_name" "$token"
-
-    echo ""
-    echo -e "${GREEN}✅ Token stored in 1Password vault '$vault'${NC}"
-    echo "Retrieve with: ./scripts/secrets.sh get $vault $token_name"
 }
 
-# Check current setup
-check_status() {
-    echo -e "${BLUE}📊 Git Configuration Status${NC}"
+# ── Status ─────────────────────────────────────────────────────────────────
+
+show_status() {
+    echo -e "${BLUE}📊 Git Configuration${NC}"
     echo ""
-    
-    echo "User Configuration:"
-    git config --list | grep "^user\." || echo "  ❌ Not configured"
+    echo "  Name:           $(git config --global user.name 2>/dev/null || echo '❌ not set')"
+    echo "  Email:          $(git config --global user.email 2>/dev/null || echo '❌ not set')"
     echo ""
 
-    echo "Credential Helper:"
-    git config credential.helper || echo "  ❌ Not configured (using Keychain by default)"
-    echo ""
-
-    echo "SSH Key Status:"
-    if [ -f ~/.ssh/id_ed25519 ]; then
-        echo "  ✅ SSH key found: ~/.ssh/id_ed25519"
+    echo -e "${BLUE}🔑 SSH Key${NC}"
+    if [ -f "$SSH_KEY" ]; then
+        echo "  Key:            ✅ $SSH_KEY"
+        echo "  Fingerprint:    $(ssh-keygen -lf "$SSH_KEY.pub" 2>/dev/null | awk '{print $2}')"
     else
-        echo "  ❌ SSH key not found"
+        echo "  Key:            ❌ not found"
     fi
     echo ""
 
-    echo "1Password Tokens:"
-    
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    if "$SCRIPT_DIR/secrets.sh" get "dev" "github_token" &>/dev/null; then
-        echo "  ✅ GitHub token stored in 1Password"
-    else
-        echo "  ❌ GitHub token not in 1Password"
-    fi
+    echo -e "${BLUE}✍️  Commit Signing${NC}"
+    local fmt=$(git config --global gpg.format 2>/dev/null || echo "none")
+    local sign=$(git config --global commit.gpgsign 2>/dev/null || echo "false")
+    local skey=$(git config --global user.signingkey 2>/dev/null || echo "none")
+    echo "  Format:         $fmt"
+    echo "  Auto-sign:      $sign"
+    echo "  Signing key:    $skey"
+    echo ""
 
-    if "$SCRIPT_DIR/secrets.sh" get "dev" "gitlab_token" &>/dev/null; then
-        echo "  ✅ GitLab token stored in 1Password"
+    echo -e "${BLUE}🐙 GitHub CLI${NC}"
+    if gh auth status &>/dev/null; then
+        echo "  Auth:           ✅ authenticated"
+        gh auth status 2>&1 | grep "Token\|account" | sed 's/^/  /'
     else
-        echo "  ❌ GitLab token not in 1Password"
+        echo "  Auth:           ❌ not authenticated"
+    fi
+    echo ""
+
+    echo -e "${BLUE}☁️  1Password${NC}"
+    if op whoami &>/dev/null 2>&1; then
+        echo "  CLI:            ✅ signed in"
+    else
+        echo "  CLI:            ❌ not signed in"
     fi
 }
 
-# Test Git authentication
-test_auth() {
-    echo -e "${BLUE}🧪 Testing Git authentication...${NC}"
+# ── Test ───────────────────────────────────────────────────────────────────
+
+run_test() {
+    echo -e "${BLUE}🧪 Testing...${NC}"
     echo ""
 
-    if [ -f ~/.ssh/id_ed25519 ]; then
-        echo "SSH Test:"
-        ssh -T git@github.com 2>&1 || true
-        echo ""
-    fi
+    echo "SSH connection:"
+    ssh -T git@github.com 2>&1 | sed 's/^/  /' || true
+    echo ""
 
-    echo -e "${BLUE}Git Clone Test:${NC}"
-    echo "Try cloning a public repo:"
-    echo "  git clone git@github.com:YOUR_USERNAME/dotfiles.git"
-    echo "Or with token:"
-    echo "  token=\$(./scripts/secrets.sh get dev github_token)"
-    echo "  git clone https://YOUR_USERNAME:\$token@github.com/YOUR_USERNAME/dotfiles.git"
+    echo "Signed commit test:"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    (
+        cd "$tmpdir"
+        git init -q
+        git config user.email "$(git config --global user.email)"
+        git config user.name "$(git config --global user.name)"
+        git config gpg.format ssh
+        git config user.signingkey "$SSH_KEY.pub"
+        git config commit.gpgsign true
+        git config gpg.ssh.allowedSignersFile "$HOME/.ssh/allowed_signers"
+        echo "test" > test.txt
+        git add test.txt
+        if git commit -q -S -m "test signed commit" 2>/dev/null; then
+            echo -e "  ${GREEN}✅ Signed commit succeeded${NC}"
+            git log --show-signature -1 2>&1 | grep -E "Good|Signature" | sed 's/^/  /'
+        else
+            echo -e "  ${RED}❌ Signed commit failed${NC}"
+        fi
+    )
+    rm -rf "$tmpdir"
 }
 
-# Main
+# ── Main ───────────────────────────────────────────────────────────────────
+
 check_prereqs
 
 case "${1:-}" in
-    ssh)
-        setup_ssh
-        ;;
-    token)
-        setup_token "${2:-}" "${3:-}"
+    setup)
+        setup_gh_auth
+        setup_ssh_key
+        upload_ssh_key
+        configure_signing
+        backup_to_1password
+        echo -e "${GREEN}🎉 Git setup complete! All commits will now be signed.${NC}"
         ;;
     status)
-        check_status
+        show_status
         ;;
     test)
-        test_auth
+        run_test
         ;;
     help|-h|--help)
         show_usage

@@ -13,7 +13,7 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-VAULT="dev"
+VAULT="Private"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SECRETS_SCRIPT="$SCRIPT_DIR/secrets.sh"
 
@@ -62,7 +62,7 @@ Examples:
 Setup (first time):
   1. Install 1Password CLI: brew install 1password-cli
   2. Sign in: op account add
-  3. Create vault: ./scripts/secrets.sh create-vault dev
+  3. Create vault: ./scripts/secrets.sh create-vault Private
   4. Backup everything: ./scripts/secrets-sync.sh backup
   5. On new machine: ./scripts/secrets-sync.sh restore all
 EOF

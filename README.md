@@ -155,59 +155,47 @@ After running scripts, you may need to:
 - ❌ **API tokens** — use environment variables or secure storage
 ## 🐙 Git & GitHub Setup
 
-### Your Current Git Config
+One-command setup: authenticates with GitHub, generates an SSH key, enables signed commits, and backs up to 1Password.
 
-```
-✅ User: Pietro Rampazzo
-✅ Email: pietro@rampazzo.eu
-✅ Credential Helper: osxkeychain (macOS default)
-```
-
-### GitHub Authentication (via `gh` CLI)
-
-Use GitHub CLI for seamless GitHub authentication (better than personal access tokens).
-
-**Setup:**
 ```bash
-# Install GitHub CLI
-brew install gh
-
-# Authenticate
-gh auth login
-# Follow prompts to authenticate with GitHub
-
-# Verify
-gh auth status
+./scripts/git-setup.sh setup
 ```
 
-**Why GitHub CLI?**
-- ✅ Secure OAuth-based authentication
-- ✅ Credentials automatically synced via 1Password
-- ✅ Works with git commands automatically
-- ✅ No token management needed
-- ✅ Credentials backed up and restored via scripts
+This runs 5 steps:
+1. **GitHub CLI auth** — logs in via `gh` with SSH protocol
+2. **SSH key** — generates Ed25519 key (or reuses existing)
+3. **GitHub upload** — adds key as both authentication and signing key
+4. **Commit signing** — configures git to sign all commits/tags with SSH
+5. **1Password backup** — stores public key in the `dev` vault
 
-**Backup & restore GitHub credentials:**
+### Verify
+
 ```bash
-# Backup to 1Password
+./scripts/git-setup.sh status   # show config
+./scripts/git-setup.sh test     # test SSH + signed commit
+```
+
+### What gets configured
+
+| Setting | Value |
+|---------|-------|
+| Protocol | SSH |
+| Signing format | SSH (no GPG/certs needed) |
+| Auto-sign | commits + tags |
+| Key | `~/.ssh/id_ed25519` |
+| Allowed signers | `~/.ssh/allowed_signers` |
+
+### Backup & restore
+
+```bash
+# Backup GitHub + git config to 1Password
 ./scripts/secrets-sync.sh backup github
+./scripts/secrets-sync.sh backup git
 
 # Restore on new machine
 ./scripts/secrets-sync.sh restore github
+./scripts/secrets-sync.sh restore git
 ```
-
-### Git SSH Setup (Additional Security)
-
-For enhanced security, add SSH key authentication:
-
-```bash
-./scripts/git-setup.sh ssh
-```
-
-This:
-1. Generates Ed25519 SSH key
-2. Shows public key to add to GitHub
-3. Sets up ~/.ssh/config
 ## � Managing Credentials with 1Password
 
 This repo includes scripts to securely manage credentials using 1Password CLI.
@@ -222,31 +210,31 @@ This repo includes scripts to securely manage credentials using 1Password CLI.
 
 2. **Create a vault for secrets**:
    ```bash
-   ./scripts/secrets.sh create-vault dev
+   ./scripts/secrets.sh create-vault Private
    ```
 
 ### Usage
 
 **Save a credential:**
 ```bash
-./scripts/secrets.sh save dev slack_token "xoxb-xxxxx"
-./scripts/secrets.sh save dev github_token "ghp_xxxxx"
+./scripts/secrets.sh save Private slack_token "xoxb-xxxxx"
+./scripts/secrets.sh save Private github_token "ghp_xxxxx"
 ```
 
 **Retrieve a credential:**
 ```bash
-./scripts/secrets.sh get dev slack_token
+./scripts/secrets.sh get Private slack_token
 ```
 
 **List all secrets in a vault:**
 ```bash
-./scripts/secrets.sh list dev
+./scripts/secrets.sh list Private
 ```
 
 **Load credentials in your shell** (add to `~/.zshrc`):
 ```bash
 # Manual load:
-export GITHUB_TOKEN="$(./scripts/secrets.sh get dev github_token)"
+export GITHUB_TOKEN="$(./scripts/secrets.sh get Private github_token)"
 
 # Or edit scripts/load-secrets.sh and source it:
 eval "$(~/GitHub/dotfiles/scripts/load-secrets.sh)"
@@ -254,7 +242,7 @@ eval "$(~/GitHub/dotfiles/scripts/load-secrets.sh)"
 
 **Export for use in scripts:**
 ```bash
-eval "$(./scripts/secrets.sh export dev DATABASE_URL db_password)"
+eval "$(./scripts/secrets.sh export Private DATABASE_URL db_password)"
 echo $DATABASE_URL
 ```
 
@@ -284,10 +272,10 @@ echo $DATABASE_URL
 
 # List all vaults and secrets
 op vault list
-op item list --vault dev
+op item list --vault Private
 
 # Securely delete a secret
-op item delete secret_name --vault dev
+op item delete secret_name --vault Private
 ```
 
 For more info: https://1password.com/devs/

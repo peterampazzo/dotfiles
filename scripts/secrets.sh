@@ -66,9 +66,9 @@ Vaults:
   prod      - Production credentials (use with caution!)
 
 Environment Setup:
-  1. Create vaults: ./scripts/secrets.sh create-vault dev
-  2. Save secrets: ./scripts/secrets.sh save dev slack_token "xoxb-xxx"
-  3. Load in shell: eval "\$(./scripts/secrets.sh export dev SLACK_TOKEN slack_token)"
+  1. Create vaults: ./scripts/secrets.sh create-vault Private
+  2. Save secrets: ./scripts/secrets.sh save Private slack_token "xoxb-xxx"
+  3. Load in shell: eval "\$(./scripts/secrets.sh export Private SLACK_TOKEN slack_token)"
 
 For more info: https://1password.com/devs/
 EOF
